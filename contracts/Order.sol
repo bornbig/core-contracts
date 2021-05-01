@@ -34,8 +34,16 @@ interface IERC20 {
     ) external returns (bool);
 }
 
+interface PTMConfig {
+    function config(string memory _key) external view returns (address);
+}
+
+interface PTMMarashals {
+    function getRandomMarshals() external returns (address[] memory);
+}
+
 contract PTMOrderEscrow {
-    string ipfs_hash;
+    string public ipfs_hash;
 
     string service_provider_private;
     string service_provider_public;
@@ -43,19 +51,28 @@ contract PTMOrderEscrow {
     string client_public;
     string[] ipfs_hash_list;
 
-    address service_provider;
-    address client;
+    address public service_provider;
+    address public client;
+    address public offer_contract;
+    address[] public marshals_list;
 
-    uint256 price;
-    uint256 order_created;
+    mapping(address => bool) dispute_fee;
+    mapping(address => uint256) dispute_vote;
+    uint256 dispute_timer;
 
-    uint256 order_status;
+    uint256 public price;
+    uint256 public duration;
+    uint256 public order_created;
+
+    uint256 public order_status;
     // 200 - created
     // 201 - accepted
     // 202 - rejected
     // 203 - cancelled
     // 204 - delivery - pending
     // 205 - delivery - accepted
+    // 206 - dispute - created
+    // 206 - dispute - proceeded by other party
 
     IERC20 USDT;
 
@@ -69,8 +86,10 @@ contract PTMOrderEscrow {
         string memory _client_public,
         string memory _client_private,
         string memory _ipfs_hash,
-        uint256 _price
+        uint256 _price,
+        uint256 _duration
     ) public {
+        require(order_status == 0, "Should only be called once");
         order_created = block.timestamp;
 
         service_provider = _service_provider;
@@ -78,7 +97,11 @@ contract PTMOrderEscrow {
         client_public = _client_public;
         client_private = _client_private;
         price = _price;
+        duration = _duration;
         ipfs_hash = _ipfs_hash;
+        offer_contract = msg.sender;
+
+        order_status = 200;
     }
 
     function cancelOrder() public {
@@ -97,6 +120,10 @@ contract PTMOrderEscrow {
         string memory _service_provider_public,
         string memory _service_provider_private
     ) public {
+        require(
+            order_status == 200,
+            "Order must not be gone further then created"
+        );
         require(msg.sender == service_provider, "Must be sevice provider");
         order_status = 201;
         service_provider_public = _service_provider_public;
@@ -104,6 +131,10 @@ contract PTMOrderEscrow {
     }
 
     function rejectOrder() public {
+        require(
+            order_status == 200,
+            "Order must not be gone further then created"
+        );
         require(msg.sender == service_provider, "Must be sevice provider");
         order_status = 202;
         USDT.transfer(client, USDT.balanceOf(address(this)));
@@ -123,6 +154,7 @@ contract PTMOrderEscrow {
 
     function getClientRequirements()
         public
+        view
         returns (
             string memory,
             string memory,
@@ -136,6 +168,7 @@ contract PTMOrderEscrow {
 
     function getServiceProviderRequirements()
         public
+        view
         returns (
             string memory,
             string memory,
@@ -151,7 +184,40 @@ contract PTMOrderEscrow {
         );
     }
 
-    function raiseDispute() {}
+    function dispute() public {
+        order_status = 206;
 
-    function cancelDispute() {}
+        // transfer dispute fee
+
+        dispute_fee[msg.sender] = true;
+        dispute_timer = block.timestamp;
+    }
+
+    function disputeAccept() public {
+        order_status = 207;
+
+        // transfer dispute fee
+
+        dispute_fee[msg.sender] = true;
+
+        PTMConfig config =
+            PTMConfig(0x01fCAE732E224B4199de657aF7FC0fD3fe9835e5);
+        address marshal = config.config("MARSHAL");
+
+        PTMMarashals marshalContract = PTMMarashals(marshal);
+
+        marshals_list = marshalContract.getRandomMarshals();
+    }
+
+    function vote(address user) public {
+        require(order_status == 207, "Order must be in dispute state");
+
+        if (user == service_provider || user == client) {
+            dispute_vote[user] = dispute_vote[user] + 1;
+
+            if (dispute_vote[user] > 2) {
+                // transfer funds to user
+            }
+        }
+    }
 }
